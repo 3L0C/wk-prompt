@@ -1,0 +1,200 @@
+#!/usr/bin/env bash
+
+# User defined options
+wk_options=()
+wk_keywords=()
+wk_preprocessor_cmds=()
+
+# QWERTY homerow
+wk_keys=(a s d f g h j k l \;)
+
+# Colemak Mod-dh homerow
+# wk_keys=(a r s t g m n e i o)
+wk_next_key="C-n"
+wk_prev_key="C-p"
+
+wk_cmd_prefix="{{"
+wk_cmd_suffix="}}"
+
+wk_sha256="$(date '+%Y%m%d' | sha256sum -)"
+wk_next_cmd="${wk_sha256}-wk_next"
+wk_prev_cmd="${wk_sha256}-wk_prev"
+
+build_wks_description() {
+    echo "${1:?need a description}"
+}
+
+build_wks_chord() {
+    wks_key="${1:?need a key}"
+    wks_cmd="${2:?need a command}"
+    wks_desc="$(build_wks_description "$wks_cmd")"
+    shift 2
+    printf '%s "%s" %s %%%s%s%s' \
+        "$wks_key" "$wks_desc" "$*" "$wk_cmd_prefix" "$wks_cmd" "$wk_cmd_suffix"
+}
+
+build_fixed_wks_chord() {
+    wks_key="${1:?need a key}"
+    wks_desc="${2:?need a description}"
+    wks_cmd="${3:?need a command}"
+    shift 3
+    printf '%s "%s" %s %%%s%s%s' \
+        "$wks_key" "$wks_desc" "$*" "$wk_cmd_prefix" "$wks_cmd" "$wk_cmd_suffix"
+}
+
+build_wks_script() {
+    wks_script=("${wk_preprocessor_cmds[@]}")
+
+    for ((i = 0; i < wk_keys_length && i + offset < wk_options_length; i++)); do
+        wk_option="${wk_options[i + offset]}"
+        wks_script+=(
+            "$(build_wks_chord "${wk_keys[i]}" "$wk_option" "${wk_keywords[@]}")"
+        )
+    done
+
+    if [[ $((offset + wk_keys_length)) -lt "$wk_options_length" ]]; then
+        wks_script+=(
+            "$(build_fixed_wks_chord "$wk_next_key" "Next" "<<$wk_next_cmd" "${wk_keywords[@]}")"
+        )
+    fi
+    if [[ "$offset" -gt 0 ]]; then
+        wks_script+=(
+            "$(build_fixed_wks_chord "$wk_prev_key" "Prev" "<<$wk_prev_cmd" "${wk_keywords[@]}")"
+        )
+    fi
+}
+
+wk_get_selection() {
+    offset="${1:?need an offset}"
+
+    build_wks_script
+    selection="$(printf '%s\n' "${wks_script[@]}" | wk --script)"
+    if [[ "${selection##*<<}" == "$wk_next_cmd" ]]; then
+        wk_get_selection "$((offset + wk_keys_length))"
+    elif [[ "${selection##*<<}" == "$wk_prev_cmd" ]]; then
+        wk_get_selection "$((offset - wk_keys_length))"
+    elif [[ -n "$selection" ]]; then
+        echo "$selection"
+    fi
+}
+
+wk_prompt_usage() {
+    cat <<-EOF
+usage: source wk-prompt ; wk_prompt "\$@" # or some other list
+
+DESCRIPTION
+    wk-prompt is a tool for building wk menus from a list of options. It
+    provides customization of wk through ENVIRONMENT VARIABLES to get the
+    desired look and feel. This is not a script in and of itself, it should be
+    sourced by other bash scripts in order to make building dynamic wk menus
+    simple.
+
+ENVIRONMENT VARIABLES
+    wk_keys
+        wk_keys is a bash array of wk trigger keys to map to the prompt options.
+        By default this is (a s d f g h j k l ;) i.e. the QWERTY home row keys.
+
+    wk_next_key
+        wk_next_key is a wk trigger key to go to the next set of options, if
+        any. By default this is 'C-n' (CTRL+n).
+
+    wk_prev_key
+        wk_prev_key is a wk trigger key to go to the previous set of options, if
+        any. By default this is 'C-p' (CTRL+p).
+
+    wk_cmd_prefix
+        wk_cmd_prefix is the prefix that surrounds a command. By default, this is
+        '{{'. If the command contains closing braces ('}}'), then this should be
+        modified accordingly. Run 'man 5 wks' and see DELIMITER for more info.
+
+    wk_cmd_suffix
+        wk_cmd_suffix is the suffix that surrounds a command. By default, this is
+        '}}'. If the command contains closing braces ('}}'), then this should be
+        modified accordingly. Run 'man 5 wks' and see DELIMITER for more info.
+
+    wk_keywords
+        wk_keywords is a bash array of hooks and flags to give to every wks
+        key chord. The default is an empty array.
+
+    wk_preprocessor_cmds
+        wk_preprocessor_cmds is a bash array with any desired preprocessor
+        commands for the wks script. The default is an empty array.
+
+    build_wks_description
+        build_wks_description is a bash function which takes in one argument and
+        returns a description. The argument is an item from the wk_options
+        array. By default the argument is returned unchanged. This function may
+        be redefined to get the desired description for each option.
+
+EXAMPLE
+    A basic example might be something like this 'wk-prompt-test' script:
+
+        #!/usr/bin/env bash
+
+        source wk-prompt # must be in your \$PATH
+
+        wk_preprocessor_cmds=(":delay 0") # set delay to 0
+        wk_keywords=("+write") # write all commands
+        wk_prompt "\$@"
+
+    Such a script could be called like so:
+
+        # {0..n} expands to the numbers between 0 and n.
+        $ wk-prompt-test {01..30}
+
+    The 'wk-prompt-test' script would give a wk menu with options 01 through 30
+    and write the selected option to stdout, if any.
+
+    A more useful example might be something like this 'wk-video-prompt' script:
+
+        #!/usr/bin/env bash
+
+        source wk-prompt # must be in your \$PATH
+
+        wk_preprocessor_cmds=(":delay 0") # set delay to 0
+        wk_keywords=("+write") # write all commands
+
+        build_wks_description() {
+            echo "\${1##*/}" # trim everything but the file name
+        }
+
+        # Read files in the playlist into a videos array
+        readarray -t videos <"playlist.m3u"
+
+        # A similar example where the videos are given by some command
+        # readarray -t videos < <(echo "/path/to/videos/"*)
+
+        # Pass the videos to wk_prompt and get the user selection
+        selection="\$(wk_prompt "\${videos[@]}")"
+
+        # If a video was selected, play it with mpv
+        [[ -n "\$selection" ]] && mpv "\$selection"
+
+    Such a script would give the user a prompt with the files in "playlist.m3u"
+    and play the selected file back using mpv. There is a bit more going on
+    here, but really not much has changed other than how the options and
+    descriptions are generated.
+
+    Hopefully this gives you an idea of how to use wk-prompt to get a nice
+    selection menu for just about anything.
+EOF
+}
+
+wk_prompt() {
+    if [[ "$#" -eq 0 ]]; then
+        wk_prompt_usage >&2
+        printf '\n%s\n' "wk-prompt: wk_prompt needs some arguments." >&2
+        exit 1
+    fi
+
+    wk_options=("$@")
+    wk_keys_length="${#wk_keys[@]}"
+    wk_options_length="${#wk_options[@]}"
+
+    wk_get_selection 0
+}
+
+if [[ "$#" -ne 0 ]]; then
+    wk_prompt_usage >&2
+    exit 1
+fi
