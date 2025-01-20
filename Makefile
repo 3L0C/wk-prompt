@@ -2,6 +2,10 @@
 NAME         := wk-prompt
 VERSION      := 0.1.0
 
+# Install locations
+PREFIX       := /usr/local
+MANPREFIX    := $(PREFIX)/share/man
+
 # Project directories
 MAN_DIR      := .
 
@@ -17,11 +21,11 @@ $(MAN_DIR)/%.1: $(MAN_DIR)/%.1.man
 clean:
 	rm -f $(MAN_FILES:.man=)
 
-install: $(BUILD_DIR)/$(NAME) $(MAN_FILES:.man=)
+install: $(NAME) $(MAN_FILES:.man=)
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
 	cp -f $(NAME) $(DESTDIR)$(PREFIX)/bin
 	chmod 755 $(DESTDIR)$(PREFIX)/bin/$(NAME)
-	for section in 1 5; do \
+	for section in 1; do \
 		mkdir -p $(DESTDIR)$(MANPREFIX)/man$${section}; \
 		cp -f $(MAN_DIR)/*.$$section $(DESTDIR)$(MANPREFIX)/man$${section}; \
 		chmod 644 $(DESTDIR)$(MANPREFIX)/man$${section}/$(NAME)*.$${section}; \
@@ -29,7 +33,7 @@ install: $(BUILD_DIR)/$(NAME) $(MAN_FILES:.man=)
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/$(NAME)
-	for section in 1 5; do \
+	for section in 1; do \
 		rm -f $(DESTDIR)$(MANPREFIX)/man$${section}/$(NAME)*.$${section}; \
 	done
 
