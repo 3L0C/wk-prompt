@@ -1,80 +1,225 @@
 #!/usr/bin/env bash
 
+# wk-prompt: Interactive menu builder using wk v0.2.0's @goto-based pagination
+
 # User defined options
 wk_options=()
 wk_keywords=()
 wk_preprocessor_cmds=()
 
-# QWERTY homerow
+# QWERTY homerow - keys for selecting options
 wk_keys=(a s d f g h j k l \;)
+
+# Internal: page navigation keys (not user-configurable)
+declare -ra wk_page_keys=(0 1 2 3 4 5 6 7 8 9)
+
+# Show "Page X of Y" title (set to empty string to disable)
+wk_show_title=1
 
 # Colemak Mod-dh homerow
 # wk_keys=(a r s t g m n e i o)
+
 wk_next_key="C-n"
 wk_prev_key="C-p"
 
 wk_cmd_prefix="{{"
 wk_cmd_suffix="}}"
 
-wk_sha256="$(date '+%Y%m%d' | sha256sum -)"
-wk_next_cmd="${wk_sha256}-wk_next"
-wk_prev_cmd="${wk_sha256}-wk_prev"
-
+# User-overridable function to transform option text for display
 build_wks_description() {
     echo "${1:?need a description}"
 }
 
+# Build a chord for an option
 build_wks_chord() {
-    wks_key="${1:?need a key}"
-    wks_cmd="${2:?need a command}"
+    local wks_key="${1:?need a key}"
+    local wks_cmd="${2:?need a command}"
+    local wks_desc
     wks_desc="$(build_wks_description "$wks_cmd")"
     shift 2
     printf '%s "%s" %s %%%s%s%s' \
         "$wks_key" "$wks_desc" "$*" "$wk_cmd_prefix" "$wks_cmd" "$wk_cmd_suffix"
 }
 
-build_fixed_wks_chord() {
-    wks_key="${1:?need a key}"
-    wks_desc="${2:?need a description}"
-    wks_cmd="${3:?need a command}"
-    shift 3
-    printf '%s "%s" %s %%%s%s%s' \
-        "$wks_key" "$wks_desc" "$*" "$wk_cmd_prefix" "$wks_cmd" "$wk_cmd_suffix"
+# Calculate pagination depth: ceil(log_D(total_pages))
+# Returns 0 for single page, 1 for <=D pages, 2 for <=D^2 pages, etc.
+calculate_pagination_depth() {
+    local total_pages=$1
+    local D=${#wk_page_keys[@]}
+
+    if ((total_pages <= 1)); then
+        echo 0
+        return
+    fi
+
+    local depth=1
+    local capacity=$D
+    while ((capacity < total_pages)); do
+        ((depth++))
+        ((capacity *= D))
+    done
+    echo "$depth"
 }
 
-build_wks_script() {
-    wks_script=("${wk_preprocessor_cmds[@]}")
+# Convert page number to space-separated @goto path
+# E.g., page 15 with depth 2 -> "1 5"
+page_to_path() {
+    local page_num=$1
+    local depth=$2
+    local D=${#wk_page_keys[@]}
 
-    for ((i = 0; i < wk_keys_length && i + offset < wk_options_length; i++)); do
-        wk_option="${wk_options[i + offset]}"
-        wks_script+=(
-            "$(build_wks_chord "${wk_keys[i]}" "$wk_option" "${wk_keywords[@]}")"
-        )
+    if ((depth == 0)); then
+        echo ""
+        return
+    fi
+
+    local path_parts=()
+    local remaining=$page_num
+
+    for ((i = depth - 1; i >= 0; i--)); do
+        # Calculate D^i
+        local divisor=1
+        for ((j = 0; j < i; j++)); do
+            ((divisor *= D))
+        done
+
+        local digit=$((remaining / divisor))
+        ((remaining %= divisor))
+        path_parts+=("${wk_page_keys[digit]}")
     done
 
-    if [[ $((offset + wk_keys_length)) -lt "$wk_options_length" ]]; then
-        wks_script+=(
-            "$(build_fixed_wks_chord "$wk_next_key" "Next" "<<$wk_next_cmd" "${wk_keywords[@]}")"
-        )
-    fi
-    if [[ "$offset" -gt 0 ]]; then
-        wks_script+=(
-            "$(build_fixed_wks_chord "$wk_prev_key" "Prev" "<<$wk_prev_cmd" "${wk_keywords[@]}")"
-        )
-    fi
+    echo "${path_parts[*]}"
 }
 
-wk_get_selection() {
-    offset="${1:?need an offset}"
+# Generate option chords + navigation for a single page
+build_page_content() {
+    local page_num=$1
+    local total_pages=$2
+    local depth=$3
+    local start_idx=$((page_num * wk_keys_length))
+    local content=()
 
-    build_wks_script
-    selection="$(printf '%s\n' "${wks_script[@]}" | wk --script)"
-    if [[ "${selection##*<<}" == "$wk_next_cmd" ]]; then
-        wk_get_selection "$((offset + wk_keys_length))"
-    elif [[ "${selection##*<<}" == "$wk_prev_cmd" ]]; then
-        wk_get_selection "$((offset - wk_keys_length))"
-    elif [[ -n "$selection" ]]; then
-        echo "$selection"
+    # Prev navigation (at top)
+    if ((page_num > 0)); then
+        local prev_path
+        prev_path=$(page_to_path $((page_num - 1)) "$depth")
+        content+=("$wk_prev_key \"Prev\" @goto \"$prev_path\"")
+    fi
+
+    # Option chords
+    local i
+    for ((i = 0; i < wk_keys_length && start_idx + i < wk_options_length; i++)); do
+        content+=("$(build_wks_chord "${wk_keys[i]}" "${wk_options[start_idx + i]}" "${wk_keywords[@]}")")
+    done
+
+    # Next navigation (at bottom)
+    if ((page_num < total_pages - 1)); then
+        local next_path
+        next_path=$(page_to_path $((page_num + 1)) "$depth")
+        content+=("$wk_next_key \"Next\" @goto \"$next_path\"")
+    fi
+
+    printf '%s\n' "${content[@]}"
+}
+
+# Generate flat chord list (no pagination)
+build_wks_single_page() {
+    local i
+    for ((i = 0; i < wk_keys_length && i < wk_options_length; i++)); do
+        build_wks_chord "${wk_keys[i]}" "${wk_options[i]}" "${wk_keywords[@]}"
+        printf '\n'
+    done
+}
+
+# Generate single-level page prefixes (total_pages <= D)
+build_wks_single_level() {
+    local total_pages=$1
+    local depth=1
+    local page_num
+
+    for ((page_num = 0; page_num < total_pages; page_num++)); do
+        if [[ -n "$wk_show_title" ]]; then
+            printf '%s "" +title "Page %d of %d"\n' \
+                "${wk_page_keys[page_num]}" $((page_num + 1)) "$total_pages"
+        else
+            printf '%s ""\n' "${wk_page_keys[page_num]}"
+        fi
+        printf '{\n'
+        build_page_content "$page_num" "$total_pages" "$depth"
+        printf '}\n'
+    done
+}
+
+# Generate nested page prefix hierarchy (total_pages > D)
+build_wks_multi_level() {
+    local total_pages=$1
+    local depth=$2
+    local prev_path_parts=()
+    local page_num
+
+    for ((page_num = 0; page_num < total_pages; page_num++)); do
+        local path
+        path=$(page_to_path "$page_num" "$depth")
+        local curr_path_parts
+        IFS=' ' read -ra curr_path_parts <<<"$path"
+
+        # Find common prefix length
+        local common_len=0
+        local min_len=${#prev_path_parts[@]}
+        ((min_len > ${#curr_path_parts[@]})) && min_len=${#curr_path_parts[@]}
+
+        for ((i = 0; i < min_len; i++)); do
+            if [[ "${prev_path_parts[i]}" == "${curr_path_parts[i]}" ]]; then
+                ((common_len++))
+            else
+                break
+            fi
+        done
+
+        # Close braces for levels that differ
+        local levels_to_close=$((${#prev_path_parts[@]} - common_len))
+        for ((i = 0; i < levels_to_close; i++)); do
+            printf '}\n'
+        done
+
+        # Open new intermediate prefixes (non-leaf levels)
+        for ((i = common_len; i < depth - 1; i++)); do
+            printf '%s ""\n{\n' "${curr_path_parts[i]}"
+        done
+
+        # Open leaf prefix (with +title if enabled)
+        if [[ -n "$wk_show_title" ]]; then
+            printf '%s "" +title "Page %d of %d"\n' \
+                "${curr_path_parts[depth - 1]}" $((page_num + 1)) "$total_pages"
+        else
+            printf '%s ""\n' "${curr_path_parts[depth - 1]}"
+        fi
+        printf '{\n'
+
+        build_page_content "$page_num" "$total_pages" "$depth"
+        prev_path_parts=("${curr_path_parts[@]}")
+    done
+
+    # Close remaining open braces
+    for ((i = 0; i < depth; i++)); do
+        printf '}\n'
+    done
+}
+
+# Generate complete wks script with all pages
+build_wks_script() {
+    local total_pages=$(((wk_options_length + wk_keys_length - 1) / wk_keys_length))
+    local depth
+    depth=$(calculate_pagination_depth "$total_pages")
+
+    printf '%s\n' "${wk_preprocessor_cmds[@]}"
+
+    if ((depth == 0)); then
+        build_wks_single_page
+    elif ((depth == 1)); then
+        build_wks_single_level "$total_pages"
+    else
+        build_wks_multi_level "$total_pages" "$depth"
     fi
 }
 
@@ -84,23 +229,27 @@ usage: source wk-prompt ; wk_prompt "\$@" # or some other list
 
 DESCRIPTION
     wk-prompt is a tool for building wk menus from a list of options. It
-    provides customization of wk through ENVIRONMENT VARIABLES to get the
-    desired look and feel. This is not a script in and of itself, it should be
-    sourced by other bash scripts in order to make building dynamic wk menus
-    simple.
+    uses wk v0.2.0's @goto meta-command for flicker-free pagination. This is
+    not a script in and of itself; it should be sourced by other bash scripts
+    to make building dynamic wk menus simple.
 
 ENVIRONMENT VARIABLES
     wk_keys
         wk_keys is a bash array of wk trigger keys to map to the prompt options.
         By default this is (a s d f g h j k l ;) i.e. the QWERTY home row keys.
 
+    wk_show_title
+        wk_show_title controls whether "Page X of Y" titles are shown. Set to
+        any non-empty value to enable (default), or empty string to disable.
+        Example: wk_show_title= to disable titles.
+
     wk_next_key
-        wk_next_key is a wk trigger key to go to the next set of options, if
-        any. By default this is 'C-n' (CTRL+n).
+        wk_next_key is a wk trigger key to go to the next page, if any.
+        By default this is 'C-n' (CTRL+n).
 
     wk_prev_key
-        wk_prev_key is a wk trigger key to go to the previous set of options, if
-        any. By default this is 'C-p' (CTRL+p).
+        wk_prev_key is a wk trigger key to go to the previous page, if any.
+        By default this is 'C-p' (CTRL+p).
 
     wk_cmd_prefix
         wk_cmd_prefix is the prefix that surrounds a command. By default, this is
@@ -140,7 +289,7 @@ EXAMPLE
     Such a script could be called like so:
 
         # {0..n} expands to the numbers between 0 and n.
-        $ wk-prompt-test {01..30}
+        \$ wk-prompt-test {01..30}
 
     The 'wk-prompt-test' script would give a wk menu with options 01 through 30
     and write the selected option to stdout, if any.
@@ -161,22 +310,15 @@ EXAMPLE
         # Read files in the playlist into a videos array
         readarray -t videos <"playlist.m3u"
 
-        # A similar example where the videos are given by some command
-        # readarray -t videos < <(echo "/path/to/videos/"*)
-
         # Pass the videos to wk_prompt and get the user selection
         selection="\$(wk_prompt "\${videos[@]}")"
 
         # If a video was selected, play it with mpv
         [[ -n "\$selection" ]] && mpv "\$selection"
 
-    Such a script would give the user a prompt with the files in "playlist.m3u"
-    and play the selected file back using mpv. There is a bit more going on
-    here, but really not much has changed other than how the options and
-    descriptions are generated.
-
     Hopefully this gives you an idea of how to use wk-prompt to get a nice
     selection menu for just about anything.
+
 EOF
 }
 
@@ -191,7 +333,17 @@ wk_prompt() {
     wk_keys_length="${#wk_keys[@]}"
     wk_options_length="${#wk_options[@]}"
 
-    wk_get_selection 0
+    local total_pages=$(((wk_options_length + wk_keys_length - 1) / wk_keys_length))
+    local depth
+    depth=$(calculate_pagination_depth "$total_pages")
+
+    if ((depth > 0)); then
+        local initial_path
+        initial_path=$(page_to_path 0 "$depth")
+        build_wks_script | wk --script --press "$initial_path"
+    else
+        build_wks_script | wk --script
+    fi
 }
 
 if [[ "$#" -ne 0 ]]; then
