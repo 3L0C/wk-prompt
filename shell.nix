@@ -1,9 +1,10 @@
 {
-  pkgs ? import <nixpkgs> {},
+  pkgs ? import <nixpkgs> { },
   wk-prompt,
 }:
 pkgs.mkShell {
-  inputsFrom = [wk-prompt];
+  buildInputs = [ pkgs.bashInteractive ];
+  inputsFrom = [ wk-prompt ];
   nativeBuildInputs = with pkgs; [
     shellcheck
     shfmt
