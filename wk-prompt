@@ -355,7 +355,7 @@ wk_prompt() {
     fi
 }
 
-if [[ "$#" -ne 0 ]]; then
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     wk_prompt_usage >&2
     exit 1
 fi
