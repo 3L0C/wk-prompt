@@ -25,59 +25,64 @@ wk_prev_key="C-p"
 wk_cmd_prefix="{{"
 wk_cmd_suffix="}}"
 
-# User-overridable function to transform option text for display
+# Internal globals set by wk_prompt, used by build_wks_script and helpers:
+#   wk_keys_length    - cached ${#wk_keys[@]}
+#   wk_options_length - cached ${#wk_options[@]}
+
+# User-overridable function to transform option text for display.
+# Sets _wks_desc as output (avoids subshell). Falls back to $1 if not overridden.
 build_wks_description() {
-    echo "${1:?need a description}"
+    _wks_desc="${1:?need a description}"
 }
 
 # Build a chord for an option
 build_wks_chord() {
     local wks_key="${1:?need a key}"
     local wks_cmd="${2:?need a command}"
-    local wks_desc
-    wks_desc="$(build_wks_description "$wks_cmd")"
+    _wks_desc=""
+    build_wks_description "$wks_cmd"
     shift 2
-    printf '%s "%s" %s %%%s%s%s' \
-        "$wks_key" "$wks_desc" "$*" "$wk_cmd_prefix" "$wks_cmd" "$wk_cmd_suffix"
+    printf '%s "%s" %s %%%s%s%s\n' \
+        "$wks_key" "$_wks_desc" "$*" "$wk_cmd_prefix" "$wks_cmd" "$wk_cmd_suffix"
 }
 
 # Calculate pagination depth: ceil(log_D(total_pages))
 # Returns 0 for single page, 1 for <=D pages, 2 for <=D^2 pages, etc.
-calculate_pagination_depth() {
+# Sets _pagination_depth as output.
+_calculate_pagination_depth() {
     local total_pages=$1
     local D=${#wk_page_keys[@]}
 
     if ((total_pages <= 1)); then
-        echo 0
+        _pagination_depth=0
         return
     fi
 
-    local depth=1
+    _pagination_depth=1
     local capacity=$D
     while ((capacity < total_pages)); do
-        ((depth++))
+        ((_pagination_depth++))
         ((capacity *= D))
     done
-    echo "$depth"
 }
 
 # Convert page number to space-separated @goto path
 # E.g., page 15 with depth 2 -> "1 5"
-page_to_path() {
+# Sets _page_path as output.
+_page_to_path() {
     local page_num=$1
     local depth=$2
     local D=${#wk_page_keys[@]}
 
     if ((depth == 0)); then
-        echo ""
+        _page_path=""
         return
     fi
 
-    local path_parts=()
+    local parts=()
     local remaining=$page_num
 
     for ((i = depth - 1; i >= 0; i--)); do
-        # Calculate D^i
         local divisor=1
         for ((j = 0; j < i; j++)); do
             ((divisor *= D))
@@ -85,10 +90,10 @@ page_to_path() {
 
         local digit=$((remaining / divisor))
         ((remaining %= divisor))
-        path_parts+=("${wk_page_keys[digit]}")
+        parts+=("${wk_page_keys[digit]}")
     done
 
-    echo "${path_parts[*]}"
+    _page_path="${parts[*]}"
 }
 
 # Generate option chords + navigation for a single page
@@ -97,29 +102,24 @@ build_page_content() {
     local total_pages=$2
     local depth=$3
     local start_idx=$((page_num * wk_keys_length))
-    local content=()
 
     # Prev navigation (at top)
     if ((page_num > 0)); then
-        local prev_path
-        prev_path=$(page_to_path $((page_num - 1)) "$depth")
-        content+=("$wk_prev_key \"Prev\" @goto \"$prev_path\"")
+        _page_to_path $((page_num - 1)) "$depth"
+        printf '%s "Prev" @goto "%s"\n' "$wk_prev_key" "$_page_path"
     fi
 
     # Option chords
     local i
     for ((i = 0; i < wk_keys_length && start_idx + i < wk_options_length; i++)); do
-        content+=("$(build_wks_chord "${wk_keys[i]}" "${wk_options[start_idx + i]}" "${wk_keywords[@]}")")
+        build_wks_chord "${wk_keys[i]}" "${wk_options[start_idx + i]}" "${wk_keywords[@]}"
     done
 
     # Next navigation (at bottom)
     if ((page_num < total_pages - 1)); then
-        local next_path
-        next_path=$(page_to_path $((page_num + 1)) "$depth")
-        content+=("$wk_next_key \"Next\" @goto \"$next_path\"")
+        _page_to_path $((page_num + 1)) "$depth"
+        printf '%s "Next" @goto "%s"\n' "$wk_next_key" "$_page_path"
     fi
-
-    printf '%s\n' "${content[@]}"
 }
 
 # Generate flat chord list (no pagination)
@@ -127,7 +127,6 @@ build_wks_single_page() {
     local i
     for ((i = 0; i < wk_keys_length && i < wk_options_length; i++)); do
         build_wks_chord "${wk_keys[i]}" "${wk_options[i]}" "${wk_keywords[@]}"
-        printf '\n'
     done
 }
 
@@ -158,10 +157,9 @@ build_wks_multi_level() {
     local page_num
 
     for ((page_num = 0; page_num < total_pages; page_num++)); do
-        local path
-        path=$(page_to_path "$page_num" "$depth")
+        _page_to_path "$page_num" "$depth"
         local curr_path_parts
-        IFS=' ' read -ra curr_path_parts <<<"$path"
+        IFS=' ' read -ra curr_path_parts <<<"$_page_path"
 
         # Find common prefix length
         local common_len=0
@@ -208,9 +206,8 @@ build_wks_multi_level() {
 
 # Generate complete wks script with all pages
 build_wks_script() {
-    local total_pages=$(((wk_options_length + wk_keys_length - 1) / wk_keys_length))
-    local depth
-    depth=$(calculate_pagination_depth "$total_pages")
+    local total_pages=$1
+    local depth=$2
 
     printf '%s\n' "${wk_preprocessor_cmds[@]}"
 
@@ -237,6 +234,12 @@ ENVIRONMENT VARIABLES
     wk_keys
         wk_keys is a bash array of wk trigger keys to map to the prompt options.
         By default this is (a s d f g h j k l ;) i.e. the QWERTY home row keys.
+        Must not be empty.
+
+    wk_page_keys
+        wk_page_keys is a read-only bash array of keys used for page navigation
+        in the @goto tree. By default this is (0 1 2 3 4 5 6 7 8 9). The number
+        of page keys determines the branching factor of the pagination tree.
 
     wk_show_title
         wk_show_title controls whether "Page X of Y" titles are shown. Set to
@@ -271,9 +274,11 @@ ENVIRONMENT VARIABLES
 
     build_wks_description
         build_wks_description is a bash function which takes in one argument and
-        returns a description. The argument is an item from the wk_options
-        array. By default the argument is returned unchanged. This function may
-        be redefined to get the desired description for each option.
+        sets the variable _wks_desc to a description. The argument is an item
+        from the wk_options array. By default _wks_desc is set to the argument
+        unchanged. This function may be redefined to get the desired description
+        for each option. Note: the function must set _wks_desc rather than
+        printing to stdout, to avoid subshell overhead on large option lists.
 
 EXAMPLE
     A basic example might be something like this 'wk-prompt-test' script:
@@ -304,7 +309,7 @@ EXAMPLE
         wk_keywords=("+write") # write all commands
 
         build_wks_description() {
-            echo "\${1##*/}" # trim everything but the file name
+            _wks_desc="\${1##*/}" # trim everything but the file name
         }
 
         # Read files in the playlist into a videos array
@@ -329,20 +334,24 @@ wk_prompt() {
         exit 1
     fi
 
-    wk_options=("$@")
     wk_keys_length="${#wk_keys[@]}"
+    if ((wk_keys_length == 0)); then
+        printf '%s\n' "wk-prompt: wk_keys must not be empty." >&2
+        exit 1
+    fi
+
+    wk_options=("$@")
     wk_options_length="${#wk_options[@]}"
 
     local total_pages=$(((wk_options_length + wk_keys_length - 1) / wk_keys_length))
-    local depth
-    depth=$(calculate_pagination_depth "$total_pages")
+    _calculate_pagination_depth "$total_pages"
+    local depth=$_pagination_depth
 
     if ((depth > 0)); then
-        local initial_path
-        initial_path=$(page_to_path 0 "$depth")
-        build_wks_script | wk --script --press "$initial_path"
+        _page_to_path 0 "$depth"
+        build_wks_script "$total_pages" "$depth" | wk --script --press "$_page_path"
     else
-        build_wks_script | wk --script
+        build_wks_script "$total_pages" "$depth" | wk --script
     fi
 }
 
