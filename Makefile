@@ -6,6 +6,9 @@ VERSION      := 0.2.0
 PREFIX       := /usr/local
 MANPREFIX    := $(PREFIX)/share/man
 
+$(NAME).1: $(NAME).1.scd
+	scdoc < $< > $@
+
 install:
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
 	cp -f $(NAME) $(DESTDIR)$(PREFIX)/bin

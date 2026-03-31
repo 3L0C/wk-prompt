@@ -10,53 +10,70 @@ wk-prompt - Shell scripting aide for *wk*(1).
 
 # DESCRIPTION
 
-*wk-prompt* is a tool for building wk menus from a list of options. It provides
-customization of wk through *ENVIRONMENT VARIABLES* to get the desired look and
-feel. This is not a script in and of itself, it should be sourced by other
-*bash*(1) scripts.
+*wk-prompt* is a tool for building wk menus from a list of options. It uses
+*wk* v0.2.0's @goto meta-command for flicker-free pagination. This is not a
+script in and of itself; it should be sourced by other *bash*(1) scripts to
+make building dynamic wk menus simple.
 
 # ENVIRONMENT VARIABLES
 
 *wk_keys*
-	A bash array of wk trigger keys to map to the prompt options. By default
-	this is _(a s d f g h j k l ;)_ i.e. the QWERTY home row keys.
+	wk_keys is a bash array of wk trigger keys to map to the prompt options.
+	By default this is _(a s d f g h j k l ;)_ i.e. the QWERTY home row
+	keys. Must not be empty.
 
-*wk_show_title*
-	Controls whether "Page X of Y" titles are shown. Set to any non-empty
-	value to enable (default), or empty string to disable. Example:
-	_wk_show_title=_ to disable titles.
+*wk_page_keys*
+	wk_page_keys is a read-only bash array of keys used for page navigation
+	in the @goto tree. By default this is _(0 1 2 3 4 5 6 7 8 9)_. The
+	number of page keys determines the branching factor of the pagination
+	tree.
+
+*wk_prompt_title*
+	wk_prompt_title is a string used as a title prefix for paginated menus.
+	When set alongside wk_show_page_numbers, the title appears as
+	"TITLE - Page X of Y". When set alone, only the title is shown.
+	By default this is an empty string (no title prefix).
+
+*wk_show_page_numbers*
+	wk_show_page_numbers controls whether "Page X of Y" is shown in the
+	title. Set to any non-empty value to enable (default), or empty string
+	to disable. Example: _wk_show_page_numbers=_ to disable page numbers.
 
 *wk_next_key*
-	A wk trigger key to go to the next set of options, if any. By default
-	this is _C-n_ (*CTRL+n*).
+	wk_next_key is a wk trigger key to go to the next page. On the last
+	page, this cycles back to the first page. By default this is _C-n_
+	(*CTRL+n*).
 
 *wk_prev_key*
-	A wk trigger key to go to the previous set of options, if any. By default
-	this is _C-p_ (*CTRL+p*).
+	wk_prev_key is a wk trigger key to go to the previous page. On the
+	first page, this cycles back to the last page. By default this is _C-p_
+	(*CTRL+p*).
 
 *wk_cmd_prefix*
-	The prefix that surrounds a command. By default, this is _{{_. If the
-	command contains closing braces (_}}_), then this should be modified
-	accordingly. See *wks*(5), *DELIMITER*, for more info.
+	wk_cmd_prefix is the prefix that surrounds a command. By default, this
+	is _{{_. If the command contains closing braces (_}}_), then this should
+	be modified accordingly. See *wks*(5), *DELIMITER*, for more info.
 
 *wk_cmd_suffix*
-	The suffix that surrounds a command. By default, this is _}}_. If the
-	command contains closing braces (_}}_), then this should be modified
-	accordingly. See *wks*(5), *DELIMITER*, for more info.
+	wk_cmd_suffix is the suffix that surrounds a command. By default, this
+	is _}}_. If the command contains closing braces (_}}_), then this should
+	be modified accordingly. See *wks*(5), *DELIMITER*, for more info.
 
 *wk_keywords*
-	A bash array of hooks and flags to give to every wks key chord. The
-	default is an empty array.
+	wk_keywords is a bash array of hooks and flags to give to every wks key
+	chord. The default is an empty array.
 
 *wk_preprocessor_cmds*
-	A bash array with any desired preprocessor commands for the wks script.
-	The default is an empty array.
+	wk_preprocessor_cmds is a bash array with any desired preprocessor
+	commands for the wks script. The default is an empty array.
 
 *build_wks_description*
-	A bash function which takes in one argument and prints a description. The
-	argument is an item from the wk_options array. By default the argument is
-	returned unchanged. This function may be redefined to get the desired
-	description for each option.
+	build_wks_description is a bash function which takes in one argument and
+	sets the variable \_wks_desc to a description. The argument is an item
+	from the wk_options array. By default \_wks_desc is set to the argument
+	unchanged. This function may be redefined to get the desired description
+	for each option. Note: the function must set \_wks_desc rather than
+	printing to stdout, to avoid subshell overhead on large option lists.
 
 # EXAMPLES
 
@@ -93,7 +110,7 @@ wk_preprocessor_cmds=(":delay 0") # set delay to 0
 wk_keywords=("+write") # write all commands
 
 build_wks_description() {
-    echo "${1##*/}" # trim everything but the file name
+    _wks_desc="${1##*/}" # trim everything but the file name
 }
 
 # Read files in the playlist into a videos array

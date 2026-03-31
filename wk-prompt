@@ -108,7 +108,7 @@ build_page_content() {
 
     # Prev navigation (at top) - cycles to last page
     if ((total_pages > 1)); then
-        local prev_page=$(( (page_num - 1 + total_pages) % total_pages ))
+        local prev_page=$(((page_num - 1 + total_pages) % total_pages))
         _page_to_path "$prev_page" "$depth"
         printf '%s "Prev" @goto "%s"\n' "$wk_prev_key" "$_page_path"
     fi
@@ -121,7 +121,7 @@ build_page_content() {
 
     # Next navigation (at bottom) - cycles to first page
     if ((total_pages > 1)); then
-        local next_page=$(( (page_num + 1) % total_pages ))
+        local next_page=$(((page_num + 1) % total_pages))
         _page_to_path "$next_page" "$depth"
         printf '%s "Next" @goto "%s"\n' "$wk_next_key" "$_page_path"
     fi
@@ -312,7 +312,7 @@ ENVIRONMENT VARIABLES
         for each option. Note: the function must set _wks_desc rather than
         printing to stdout, to avoid subshell overhead on large option lists.
 
-EXAMPLE
+EXAMPLES
     A basic example might be something like this 'wk-prompt-test' script:
 
         #!/usr/bin/env bash
