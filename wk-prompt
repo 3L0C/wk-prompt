@@ -13,8 +13,11 @@ wk_keys=(a s d f g h j k l \;)
 # Internal: page navigation keys (not user-configurable)
 declare -ra wk_page_keys=(0 1 2 3 4 5 6 7 8 9)
 
-# Show "Page X of Y" title (set to empty string to disable)
-wk_show_title=1
+# Custom title prefix (e.g., "Videos" -> "Videos - Page 1 of 3")
+wk_prompt_title=""
+
+# Show "Page X of Y" in title (set to empty string to disable)
+wk_show_page_numbers=1
 
 # Colemak Mod-dh homerow
 # wk_keys=(a r s t g m n e i o)
@@ -103,9 +106,10 @@ build_page_content() {
     local depth=$3
     local start_idx=$((page_num * wk_keys_length))
 
-    # Prev navigation (at top)
-    if ((page_num > 0)); then
-        _page_to_path $((page_num - 1)) "$depth"
+    # Prev navigation (at top) - cycles to last page
+    if ((total_pages > 1)); then
+        local prev_page=$(( (page_num - 1 + total_pages) % total_pages ))
+        _page_to_path "$prev_page" "$depth"
         printf '%s "Prev" @goto "%s"\n' "$wk_prev_key" "$_page_path"
     fi
 
@@ -115,10 +119,27 @@ build_page_content() {
         build_wks_chord "${wk_keys[i]}" "${wk_options[start_idx + i]}" "${wk_keywords[@]}"
     done
 
-    # Next navigation (at bottom)
-    if ((page_num < total_pages - 1)); then
-        _page_to_path $((page_num + 1)) "$depth"
+    # Next navigation (at bottom) - cycles to first page
+    if ((total_pages > 1)); then
+        local next_page=$(( (page_num + 1) % total_pages ))
+        _page_to_path "$next_page" "$depth"
         printf '%s "Next" @goto "%s"\n' "$wk_next_key" "$_page_path"
+    fi
+}
+
+# Build +title string from wk_prompt_title and/or page numbers.
+# Sets _title_str as output (empty if nothing to show).
+_build_title() {
+    local page_num=$1
+    local total_pages=$2
+    _title_str=""
+
+    if [[ -n "$wk_prompt_title" && -n "$wk_show_page_numbers" ]]; then
+        _title_str="$wk_prompt_title - Page $((page_num + 1)) of $total_pages"
+    elif [[ -n "$wk_prompt_title" ]]; then
+        _title_str="$wk_prompt_title"
+    elif [[ -n "$wk_show_page_numbers" ]]; then
+        _title_str="Page $((page_num + 1)) of $total_pages"
     fi
 }
 
@@ -137,9 +158,9 @@ build_wks_single_level() {
     local page_num
 
     for ((page_num = 0; page_num < total_pages; page_num++)); do
-        if [[ -n "$wk_show_title" ]]; then
-            printf '%s "" +title "Page %d of %d"\n' \
-                "${wk_page_keys[page_num]}" $((page_num + 1)) "$total_pages"
+        _build_title "$page_num" "$total_pages"
+        if [[ -n "$_title_str" ]]; then
+            printf '%s "" +title "%s"\n' "${wk_page_keys[page_num]}" "$_title_str"
         else
             printf '%s ""\n' "${wk_page_keys[page_num]}"
         fi
@@ -186,9 +207,9 @@ build_wks_multi_level() {
         done
 
         # Open leaf prefix (with +title if enabled)
-        if [[ -n "$wk_show_title" ]]; then
-            printf '%s "" +title "Page %d of %d"\n' \
-                "${curr_path_parts[depth - 1]}" $((page_num + 1)) "$total_pages"
+        _build_title "$page_num" "$total_pages"
+        if [[ -n "$_title_str" ]]; then
+            printf '%s "" +title "%s"\n' "${curr_path_parts[depth - 1]}" "$_title_str"
         else
             printf '%s ""\n' "${curr_path_parts[depth - 1]}"
         fi
@@ -210,6 +231,9 @@ build_wks_script() {
     local depth=$2
 
     printf '%s\n' "${wk_preprocessor_cmds[@]}"
+    if [[ -n "$wk_prompt_title" ]]; then
+        printf ':title "%s"\n' "$wk_prompt_title"
+    fi
 
     if ((depth == 0)); then
         build_wks_single_page
@@ -241,17 +265,25 @@ ENVIRONMENT VARIABLES
         in the @goto tree. By default this is (0 1 2 3 4 5 6 7 8 9). The number
         of page keys determines the branching factor of the pagination tree.
 
-    wk_show_title
-        wk_show_title controls whether "Page X of Y" titles are shown. Set to
-        any non-empty value to enable (default), or empty string to disable.
-        Example: wk_show_title= to disable titles.
+    wk_prompt_title
+        wk_prompt_title is a string used as a title prefix for paginated menus.
+        When set alongside wk_show_page_numbers, the title appears as
+        "TITLE - Page X of Y". When set alone, only the title is shown.
+        By default this is an empty string (no title prefix).
+
+    wk_show_page_numbers
+        wk_show_page_numbers controls whether "Page X of Y" is shown in the
+        title. Set to any non-empty value to enable (default), or empty string
+        to disable. Example: wk_show_page_numbers= to disable page numbers.
 
     wk_next_key
-        wk_next_key is a wk trigger key to go to the next page, if any.
+        wk_next_key is a wk trigger key to go to the next page. On the last
+        page, this cycles back to the first page.
         By default this is 'C-n' (CTRL+n).
 
     wk_prev_key
-        wk_prev_key is a wk trigger key to go to the previous page, if any.
+        wk_prev_key is a wk trigger key to go to the previous page. On the
+        first page, this cycles back to the last page.
         By default this is 'C-p' (CTRL+p).
 
     wk_cmd_prefix
